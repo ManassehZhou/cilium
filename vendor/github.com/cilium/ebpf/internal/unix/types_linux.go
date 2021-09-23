@@ -1,9 +1,11 @@
+//go:build linux
 // +build linux
 
 package unix
 
 import (
 	"bytes"
+	"fmt"
 	"syscall"
 
 	linux "golang.org/x/sys/unix"
@@ -20,10 +22,11 @@ const (
 	EPERM   = linux.EPERM
 	ESRCH   = linux.ESRCH
 	ENODEV  = linux.ENODEV
+	EBADF   = linux.EBADF
+	E2BIG   = linux.E2BIG
 	// ENOTSUPP is not the same as ENOTSUP or EOPNOTSUP
 	ENOTSUPP = syscall.Errno(0x20c)
 
-	EBADF                    = linux.EBADF
 	BPF_F_NO_PREALLOC        = linux.BPF_F_NO_PREALLOC
 	BPF_F_NUMA_NODE          = linux.BPF_F_NUMA_NODE
 	BPF_F_RDONLY             = linux.BPF_F_RDONLY
@@ -31,8 +34,13 @@ const (
 	BPF_F_RDONLY_PROG        = linux.BPF_F_RDONLY_PROG
 	BPF_F_WRONLY_PROG        = linux.BPF_F_WRONLY_PROG
 	BPF_F_SLEEPABLE          = linux.BPF_F_SLEEPABLE
+	BPF_F_MMAPABLE           = linux.BPF_F_MMAPABLE
+	BPF_F_INNER_MAP          = linux.BPF_F_INNER_MAP
 	BPF_OBJ_NAME_LEN         = linux.BPF_OBJ_NAME_LEN
 	BPF_TAG_SIZE             = linux.BPF_TAG_SIZE
+	BPF_RINGBUF_BUSY_BIT     = linux.BPF_RINGBUF_BUSY_BIT
+	BPF_RINGBUF_DISCARD_BIT  = linux.BPF_RINGBUF_DISCARD_BIT
+	BPF_RINGBUF_HDR_SZ       = linux.BPF_RINGBUF_HDR_SZ
 	SYS_BPF                  = linux.SYS_BPF
 	F_DUPFD_CLOEXEC          = linux.F_DUPFD_CLOEXEC
 	EPOLL_CTL_ADD            = linux.EPOLL_CTL_ADD
@@ -42,6 +50,7 @@ const (
 	PROT_READ                = linux.PROT_READ
 	PROT_WRITE               = linux.PROT_WRITE
 	MAP_SHARED               = linux.MAP_SHARED
+	PERF_ATTR_SIZE_VER1      = linux.PERF_ATTR_SIZE_VER1
 	PERF_TYPE_SOFTWARE       = linux.PERF_TYPE_SOFTWARE
 	PERF_TYPE_TRACEPOINT     = linux.PERF_TYPE_TRACEPOINT
 	PERF_COUNT_SW_BPF_OUTPUT = linux.PERF_COUNT_SW_BPF_OUTPUT
@@ -65,11 +74,6 @@ type Statfs_t = linux.Statfs_t
 
 // Rlimit is a wrapper
 type Rlimit = linux.Rlimit
-
-// Setrlimit is a wrapper
-func Setrlimit(resource int, rlim *Rlimit) (err error) {
-	return linux.Setrlimit(resource, rlim)
-}
 
 // Syscall is a wrapper
 func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err syscall.Errno) {
@@ -198,4 +202,21 @@ func KernelRelease() (string, error) {
 	end := bytes.IndexByte(uname.Release[:], 0)
 	release := string(uname.Release[:end])
 	return release, nil
+}
+
+func RemoveMemlockRlimit() (func() error, error) {
+	var oldLimit Rlimit
+	newLimit := Rlimit{Cur: RLIM_INFINITY, Max: RLIM_INFINITY}
+
+	// pid 0 affects the current process.
+	if err := linux.Prlimit(0, RLIMIT_MEMLOCK, &newLimit, &oldLimit); err != nil {
+		return nil, fmt.Errorf("failed to set memlock rlimit: %w", err)
+	}
+
+	return func() error {
+		if err := linux.Setrlimit(RLIMIT_MEMLOCK, &oldLimit); err != nil {
+			return fmt.Errorf("failed to revert memlock rlimit: %w", err)
+		}
+		return nil
+	}, nil
 }
