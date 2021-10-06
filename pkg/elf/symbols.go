@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright 2019-2021 Authors of Cilium
 
 package elf
 
@@ -50,10 +50,11 @@ func (k symbolKind) String() string {
 
 // symbol stores the location and type of a symbol within the ELF file.
 type symbol struct {
-	name   string
-	kind   symbolKind
-	offset uint64
-	size   uint64
+	name      string
+	kind      symbolKind
+	offset    uint64
+	offsetBTF uint64
+	size      uint64
 }
 
 func newSymbol(name string, kind symbolKind, offset, size uint64) symbol {
@@ -236,6 +237,22 @@ func (s *symbols) extractFrom(e *elf.File) error {
 
 		if errors.Is(err, io.EOF) {
 			break
+		}
+	}
+
+	// If .BTF section is present in the ELF, get the offset of each symbol
+	// into the BTF string table to be able to overwrite them later.
+	btfSec := e.Section(".BTF")
+	if btfSec != nil {
+		// Read BTF header from the .BTF section.
+		h, err := readBTFHeader(btfSec, e.ByteOrder)
+		if err != nil {
+			return fmt.Errorf("reading BTF section header: %s", err)
+		}
+
+		// Populate offsetBTF fields of all symbols.
+		if err := findBTFSymbols(stringOffsets, btfSec, h); err != nil {
+			return fmt.Errorf("finding BTF string offsets: %s", err)
 		}
 	}
 
